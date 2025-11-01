@@ -174,27 +174,55 @@ export function useUserGifts() {
         const encryptedMessageURI = giftData?.encryptedMessageURI || (Array.isArray(giftData) ? giftData[6] : '')
         const claimed = giftData?.claimed !== undefined ? giftData.claimed : (Array.isArray(giftData) ? giftData[7] : false)
         
+        // Normalize sender address for validation
+        let senderStr = ''
+        if (sender) {
+          if (typeof sender === 'string') {
+            senderStr = sender.trim().toLowerCase()
+          } else if (typeof sender === 'object' && sender?.toString) {
+            senderStr = sender.toString().trim().toLowerCase()
+          } else {
+            senderStr = String(sender).trim().toLowerCase()
+          }
+        }
+
         // Check if gift exists - a valid gift must have a non-zero sender
         // In Solidity, uninitialized structs have all fields as zero/default values
-        if (!sender || 
-            sender === '0x0000000000000000000000000000000000000000' || 
-            sender === '0x' ||
-            (typeof sender === 'string' && sender.trim() === '')) {
-          console.log(`[useUserGifts] Gift ${index} has invalid sender:`, sender)
+        const zeroAddress = '0x0000000000000000000000000000000000000000'
+        if (!senderStr || 
+            senderStr === zeroAddress || 
+            senderStr === '0x' ||
+            senderStr.length < 42) {
+          console.log(`[useUserGifts] Gift ${index} has invalid sender:`, senderStr)
           return false
         }
 
-        // Check if current user is the recipient
-        // Handle both string addresses and address objects
-        const recipientAddress = (recipient?.toString() || recipient || '').toLowerCase()
-        const userAddress = (address || '').toLowerCase()
-        const isRecipient = recipientAddress === userAddress && recipientAddress !== ''
+        // Normalize recipient address - handle all possible formats
+        let recipientStr = ''
+        if (recipient) {
+          if (typeof recipient === 'string') {
+            recipientStr = recipient.trim().toLowerCase()
+          } else if (typeof recipient === 'object' && recipient?.toString) {
+            recipientStr = recipient.toString().trim().toLowerCase()
+          } else {
+            recipientStr = String(recipient).trim().toLowerCase()
+          }
+        }
+
+        // Normalize user address
+        const userAddress = (address || '').trim().toLowerCase()
+
+        // Check if current user is the recipient (case-insensitive comparison)
+        const isRecipient = recipientStr === userAddress && recipientStr !== '' && recipientStr.length >= 42
 
         console.log(`[useUserGifts] Gift ${index} filtering:`, {
-          sender: sender?.toString(),
-          recipient: recipientAddress,
+          sender: senderStr,
+          recipient: recipientStr,
           userAddress,
           isRecipient,
+          recipientMatch: recipientStr === userAddress,
+          recipientLength: recipientStr.length,
+          userAddressLength: userAddress.length,
           amount: amount?.toString(),
           claimed,
           giftStructure: Array.isArray(giftData) ? 'array' : 'object'
@@ -210,30 +238,76 @@ export function useUserGifts() {
         const { id: index, data: gift } = giftWrapper
         const giftData = gift as any
         
-        // Extract gift fields
+        // Extract gift fields with null/undefined safety
         const sender = giftData?.sender || (Array.isArray(giftData) ? giftData[0] : null)
         const recipient = giftData?.recipient || (Array.isArray(giftData) ? giftData[1] : null)
-        const unlockTime = giftData?.unlockTime || (Array.isArray(giftData) ? giftData[2] : null)
-        const assetType = giftData?.assetType !== undefined ? giftData.assetType : (Array.isArray(giftData) ? giftData[3] : 0)
+        const unlockTime = giftData?.unlockTime !== undefined ? giftData.unlockTime : (Array.isArray(giftData) && giftData[2] !== undefined ? giftData[2] : null)
+        const assetType = giftData?.assetType !== undefined ? giftData.assetType : (Array.isArray(giftData) && giftData[3] !== undefined ? giftData[3] : 0)
         const token = giftData?.token || (Array.isArray(giftData) ? giftData[4] : null)
-        const amount = giftData?.amount || (Array.isArray(giftData) ? giftData[5] : null)
-        const encryptedMessageURI = giftData?.encryptedMessageURI || (Array.isArray(giftData) ? giftData[6] : '')
-        const claimed = giftData?.claimed !== undefined ? giftData.claimed : (Array.isArray(giftData) ? giftData[7] : false)
+        const amount = giftData?.amount !== undefined ? giftData.amount : (Array.isArray(giftData) && giftData[5] !== undefined ? giftData[5] : null)
+        const encryptedMessageURI = giftData?.encryptedMessageURI || (Array.isArray(giftData) && giftData[6] !== undefined ? giftData[6] : '')
+        const claimed = giftData?.claimed !== undefined ? giftData.claimed : (Array.isArray(giftData) && giftData[7] !== undefined ? giftData[7] : false)
 
-        // Ensure we have valid values
-        const finalAmount = amount || BigInt(0)
-        const finalUnlockTime = unlockTime || BigInt(0)
+        // Normalize addresses (case-insensitive)
+        const normalizedSender = sender 
+          ? (typeof sender === 'string' ? sender.trim().toLowerCase() : sender.toString().trim().toLowerCase())
+          : ''
+        const normalizedRecipient = recipient 
+          ? (typeof recipient === 'string' ? recipient.trim().toLowerCase() : recipient.toString().trim().toLowerCase())
+          : ''
+
+        // Safely handle BigInt values
+        let finalAmount: bigint
+        try {
+          if (amount === null || amount === undefined) {
+            finalAmount = BigInt(0)
+          } else if (typeof amount === 'bigint') {
+            finalAmount = amount
+          } else if (typeof amount === 'string' || typeof amount === 'number') {
+            finalAmount = BigInt(amount)
+          } else {
+            finalAmount = BigInt(0)
+          }
+        } catch (e) {
+          console.error(`[useUserGifts] Error parsing amount for gift ${index}:`, e)
+          finalAmount = BigInt(0)
+        }
+
+        // Safely handle unlock time
+        let finalUnlockTime: bigint
+        try {
+          if (unlockTime === null || unlockTime === undefined) {
+            finalUnlockTime = BigInt(0)
+          } else if (typeof unlockTime === 'bigint') {
+            finalUnlockTime = unlockTime
+          } else if (typeof unlockTime === 'string' || typeof unlockTime === 'number') {
+            finalUnlockTime = BigInt(unlockTime)
+          } else {
+            finalUnlockTime = BigInt(0)
+          }
+        } catch (e) {
+          console.error(`[useUserGifts] Error parsing unlockTime for gift ${index}:`, e)
+          finalUnlockTime = BigInt(0)
+        }
+
+        // Safely parse other fields
         const finalAssetType = Number(assetType) || 0
-        const finalToken = token?.toString() || '0x0000000000000000000000000000000000000000'
+        const finalToken = token 
+          ? (typeof token === 'string' ? token.trim().toLowerCase() : token.toString().trim().toLowerCase())
+          : '0x0000000000000000000000000000000000000000'
         const finalEncryptedMessageURI = encryptedMessageURI?.toString() || ''
-        const recipientAddress = (recipient?.toString() || recipient || '').toLowerCase()
+
+        // Convert unlock time to milliseconds (handle edge case where it's 0)
+        const unlockTimeMs = finalUnlockTime > BigInt(0) 
+          ? Number(finalUnlockTime) * 1000 
+          : 0
 
         return {
           id: index,
-          sender: sender?.toString() || '',
-          recipient: recipientAddress,
+          sender: normalizedSender,
+          recipient: normalizedRecipient,
           amount: formatEther(finalAmount),
-          unlockTime: Number(finalUnlockTime) * 1000, // Convert to milliseconds
+          unlockTime: unlockTimeMs,
           encryptedMessageURI: finalEncryptedMessageURI,
           claimed: Boolean(claimed),
           assetType: finalAssetType,

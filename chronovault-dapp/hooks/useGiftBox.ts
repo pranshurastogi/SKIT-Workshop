@@ -2,6 +2,7 @@ import { useWriteContract, useReadContract, useWaitForTransactionReceipt } from 
 import { GIFTBOX_CONTRACT_ADDRESS, GIFTBOX_ABI } from '@/lib/giftBoxContract'
 import { parseEther, formatEther, parseUnits } from 'viem'
 import { toast } from 'sonner'
+import { useEffect } from 'react'
 
 // TypeScript types matching the contract
 export interface Gift {
@@ -20,9 +21,31 @@ export interface Gift {
  */
 export function useCreateEthGift() {
   const { writeContract, data: hash, isPending, error, reset } = useWriteContract()
-  const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({
+  const { 
+    isLoading: isConfirming, 
+    isSuccess, 
+    isError: isReceiptError,
+    error: receiptError 
+  } = useWaitForTransactionReceipt({
     hash,
   })
+
+  // Check for circuit breaker errors in receipt
+  useEffect(() => {
+    if (isReceiptError && receiptError) {
+      const errorMessage = receiptError.message || String(receiptError) || ''
+      const isCircuitBreaker = 
+        errorMessage.toLowerCase().includes('circuit breaker') ||
+        errorMessage.toLowerCase().includes('circuit breaker is open')
+      
+      if (isCircuitBreaker) {
+        toast.error('Contract is paused: Circuit breaker is open', {
+          duration: 10000,
+          description: 'The transaction was submitted but failed because the contract is paused.',
+        })
+      }
+    }
+  }, [isReceiptError, receiptError])
 
   const createEthGift = async (
     recipient: string,
@@ -44,7 +67,50 @@ export function useCreateEthGift() {
       })
     } catch (err: any) {
       console.error('Error creating ETH gift:', err)
-      toast.error(err?.message || 'Failed to create gift')
+      
+      // Parse error message from various possible locations in viem error structure
+      const errorMessage = 
+        err?.message || 
+        err?.shortMessage || 
+        err?.reason ||
+        err?.cause?.message ||
+        err?.cause?.reason ||
+        err?.details ||
+        String(err)
+      
+      const errorString = errorMessage.toLowerCase()
+      
+      // Check if it's a circuit breaker error (check multiple variations)
+      const isCircuitBreaker = 
+        errorString.includes('circuit breaker') ||
+        errorString.includes('circuit breaker is open') ||
+        errorString.includes('execution prevented because the circuit breaker') ||
+        (errorString.includes('revert') && errorString.includes('circuit'))
+      
+      if (isCircuitBreaker) {
+        const message = 'Contract is paused: The circuit breaker is currently open. Gift creation is temporarily disabled.'
+        toast.error(message, {
+          duration: 10000, // Show for longer since it's important
+          description: 'This is a safety mechanism that can pause the contract in case of emergencies. Please contact the contract administrator or try again later.',
+        })
+        throw new Error(message)
+      }
+      
+      // Check for other revert errors
+      if (errorString.includes('revert')) {
+        // Try to extract the revert reason if available
+        const revertReasonMatch = errorMessage.match(/revert\s+(.+)/i)
+        const revertReason = revertReasonMatch ? revertReasonMatch[1] : ''
+        
+        if (revertReason) {
+          toast.error(`Transaction reverted: ${revertReason}`)
+        } else {
+          toast.error('Transaction reverted. Check your inputs and contract status.')
+        }
+      } else {
+        toast.error(errorMessage || 'Failed to create gift')
+      }
+      
       throw err
     }
   }
@@ -131,7 +197,33 @@ export function useClaimGift() {
       })
     } catch (err: any) {
       console.error('Error claiming gift:', err)
-      toast.error(err?.message || 'Failed to claim gift')
+      
+      // Parse error message for circuit breaker
+      const errorMessage = err?.message || err?.shortMessage || String(err)
+      const errorDetails = err?.details || err?.cause?.message || ''
+      
+      // Check if it's a circuit breaker error
+      const isCircuitBreaker = 
+        errorMessage.toLowerCase().includes('circuit breaker') ||
+        errorMessage.toLowerCase().includes('circuit breaker is open') ||
+        errorDetails.toLowerCase().includes('circuit breaker')
+      
+      if (isCircuitBreaker) {
+        const message = 'Contract is paused: The circuit breaker is currently open. Gift claiming is temporarily disabled. Please contact the contract administrator or try again later.'
+        toast.error(message, {
+          duration: 10000,
+          description: 'This is a safety mechanism that can pause the contract in case of emergencies.',
+        })
+        throw new Error(message)
+      }
+      
+      // Check for other common errors
+      if (errorMessage.toLowerCase().includes('revert')) {
+        toast.error('Transaction reverted. The gift may have already been claimed or is not yet unlocked.')
+      } else {
+        toast.error(errorMessage || 'Failed to claim gift')
+      }
+      
       throw err
     }
   }

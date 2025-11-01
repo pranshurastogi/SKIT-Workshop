@@ -72,10 +72,28 @@ export default function ChronoVault() {
     }
   }, [createSuccess, resetCreate, refetchGifts])
 
-  // Handle create errors
+  // Handle create errors with better messaging
   useEffect(() => {
     if (createError) {
-      toast.error(createError.message || "Failed to create gift box")
+      const errorMessage = createError.message || String(createError) || "Failed to create gift box"
+      
+      // Check if it's a circuit breaker error
+      const isCircuitBreaker = 
+        errorMessage.toLowerCase().includes('circuit breaker') ||
+        errorMessage.toLowerCase().includes('circuit breaker is open')
+      
+      if (isCircuitBreaker) {
+        // Already shown in hook, but ensure it's visible
+        toast.error("Contract is currently paused", {
+          description: "The circuit breaker is open. Please contact the administrator or try again later.",
+          duration: 8000,
+        })
+      } else {
+        // Show general error
+        toast.error(errorMessage, {
+          duration: 5000,
+        })
+      }
     }
   }, [createError])
 
@@ -92,58 +110,195 @@ export default function ChronoVault() {
     }
   }, [claimSuccess, resetClaim, refetchGifts])
 
-  // Handle claim errors
+  // Handle claim errors with better messaging
   useEffect(() => {
     if (claimError) {
-      toast.error(claimError.message || "Failed to claim gift")
+      const errorMessage = claimError.message || String(claimError) || "Failed to claim gift"
+      
+      // Check if it's a circuit breaker error
+      const isCircuitBreaker = 
+        errorMessage.toLowerCase().includes('circuit breaker') ||
+        errorMessage.toLowerCase().includes('circuit breaker is open')
+      
+      if (isCircuitBreaker) {
+        toast.error("Contract is currently paused", {
+          description: "The circuit breaker is open. Please contact the administrator or try again later.",
+          duration: 8000,
+        })
+      } else {
+        toast.error(errorMessage, {
+          duration: 5000,
+        })
+      }
     }
   }, [claimError])
 
   const handleCreateGiftBox = () => {
-    // Validation
-    if (!recipientAddress || !ethAmount || !unlockDateTime) {
-      toast.error("Please fill in all fields")
+    // Trim all inputs
+    const trimmedRecipient = recipientAddress.trim()
+    const trimmedAmount = ethAmount.trim()
+    const trimmedMessage = message.trim()
+    const trimmedDateTime = unlockDateTime.trim()
+
+    // Validation: Required fields
+    if (!trimmedRecipient || !trimmedAmount || !trimmedDateTime) {
+      toast.error("Please fill in all required fields (recipient, amount, unlock date)")
       return
     }
 
-    if (!isValidAddress(recipientAddress)) {
-      toast.error("Invalid recipient address")
+    // Normalize and validate recipient address
+    const normalizedRecipient = normalizeAddress(trimmedRecipient)
+    if (!normalizedRecipient) {
+      toast.error("Invalid recipient address. Must be a valid Ethereum address (0x followed by 40 hex characters)")
       return
     }
 
-    const unlockTimestamp = Math.floor(new Date(unlockDateTime).getTime() / 1000)
+    // Prevent sending to self
+    const userAddressLower = address?.toLowerCase()
+    if (normalizedRecipient === userAddressLower) {
+      toast.error("Cannot send a gift to yourself")
+      return
+    }
+
+    // Validate and parse ETH amount
+    const amountValue = parseFloat(trimmedAmount)
+    if (isNaN(amountValue) || amountValue <= 0) {
+      toast.error("ETH amount must be a positive number greater than 0")
+      return
+    }
+
+    // Prevent dust transactions (less than 0.000001 ETH)
+    if (amountValue < 0.000001) {
+      toast.error("Amount is too small. Minimum is 0.000001 ETH")
+      return
+    }
+
+    // Prevent unreasonably large amounts (safety check - 1000 ETH)
+    if (amountValue > 1000) {
+      toast.error("Amount is too large. Maximum is 1000 ETH")
+      return
+    }
+
+    // Validate unlock date/time
+    if (!trimmedDateTime) {
+      toast.error("Please select an unlock date and time")
+      return
+    }
+
+    const unlockDate = new Date(trimmedDateTime)
+    if (isNaN(unlockDate.getTime())) {
+      toast.error("Invalid date/time format")
+      return
+    }
+
+    const unlockTimestamp = Math.floor(unlockDate.getTime() / 1000)
     const now = Math.floor(Date.now() / 1000)
+    const maxFutureTime = now + (365 * 24 * 60 * 60) // 1 year from now
 
     if (unlockTimestamp <= now) {
       toast.error("Unlock time must be in the future")
       return
     }
 
-    // For now, we'll use the message as the encryptedMessageURI
-    // In a real app, you would encrypt this on the client side
-    const encryptedMessageURI = message || "ipfs://" // Placeholder for encrypted message
+    // Prevent dates too far in the future (more than 1 year)
+    if (unlockTimestamp > maxFutureTime) {
+      toast.error("Unlock time cannot be more than 1 year in the future")
+      return
+    }
+
+    // Use message or default
+    const encryptedMessageURI = trimmedMessage || "ipfs://"
+
+    // Ensure amount is formatted correctly (remove any formatting)
+    const cleanAmount = amountValue.toFixed(18).replace(/\.?0+$/, '') // Remove trailing zeros
+
+    console.log('[handleCreateGiftBox] Creating gift with:', {
+      recipient: normalizedRecipient,
+      amount: cleanAmount,
+      unlockTimestamp,
+      message: encryptedMessageURI,
+      userAddress: address
+    })
 
     createEthGift(
-      recipientAddress,
+      normalizedRecipient,
       unlockTimestamp,
       encryptedMessageURI,
-      ethAmount
+      cleanAmount
     )
   }
 
   const handleClaimGift = (giftId: number) => {
+    // Find the gift to validate
+    const gift = receivedGifts.find(g => g.id === giftId)
+    
+    if (!gift) {
+      toast.error("Gift not found")
+      return
+    }
+
+    // Check if already claimed
+    if (gift.claimed) {
+      toast.error("This gift has already been claimed")
+      return
+    }
+
+    // Check if unlock time has passed
+    const now = Date.now()
+    if (gift.unlockTime > now) {
+      const timeRemaining = Math.ceil((gift.unlockTime - now) / (1000 * 60 * 60))
+      toast.error(`Gift is still locked. Unlocks in ${timeRemaining} hours`)
+      return
+    }
+
+    // Validate gift ID is valid
+    if (giftId < 0 || !Number.isInteger(giftId)) {
+      toast.error("Invalid gift ID")
+      return
+    }
+
+    // Check amount is greater than 0
+    const amountValue = parseFloat(gift.amount)
+    if (isNaN(amountValue) || amountValue <= 0) {
+      toast.error("Invalid gift amount")
+      return
+    }
+
+    console.log('[handleClaimGift] Claiming gift:', {
+      giftId,
+      amount: gift.amount,
+      unlockTime: new Date(gift.unlockTime).toISOString(),
+      now: new Date().toISOString(),
+      isUnlocked: gift.unlockTime <= now
+    })
+
     claimGift(giftId)
   }
 
-  // Helper function to validate Ethereum address
+  // Helper function to validate and normalize Ethereum address
   const isValidAddress = (address: string): boolean => {
-    return /^0x[a-fA-F0-9]{40}$/.test(address)
+    if (!address || typeof address !== 'string') return false
+    // Trim whitespace
+    const trimmed = address.trim()
+    // Must start with 0x and have exactly 40 hex characters (42 total)
+    return /^0x[a-fA-F0-9]{40}$/.test(trimmed)
   }
 
-  // Format address for display
-  const formatAddress = (address: string) => {
-    if (!address) return ""
-    return `${address.slice(0, 6)}...${address.slice(-4)}`
+  // Normalize address: trim, lowercase, and ensure valid format
+  const normalizeAddress = (address: string): string | null => {
+    if (!address || typeof address !== 'string') return null
+    const trimmed = address.trim()
+    if (!isValidAddress(trimmed)) return null
+    // Convert to lowercase for consistency (EIP-55 checksum is optional)
+    return trimmed.toLowerCase() as `0x${string}`
+  }
+
+  // Format address for display (handles edge cases)
+  const formatAddress = (address: string | null | undefined) => {
+    if (!address || typeof address !== 'string') return "Invalid Address"
+    const trimmed = address.trim()
+    if (trimmed.length < 10) return trimmed // Too short to format
+    return `${trimmed.slice(0, 6)}...${trimmed.slice(-4)}`
   }
   
   // Toggle gift expansion
@@ -447,7 +602,22 @@ export default function ChronoVault() {
                       id="recipient"
                       placeholder="0x..."
                       value={recipientAddress}
-                      onChange={(e) => setRecipientAddress(e.target.value)}
+                      onChange={(e) => {
+                        let value = e.target.value
+                        // Allow user to type, but trim leading/trailing whitespace
+                        // We'll validate on submit, but help with formatting
+                        if (value.startsWith('0x') || value.startsWith('0X')) {
+                          // Keep as is for now - normalize on blur
+                        }
+                        setRecipientAddress(value)
+                      }}
+                      onBlur={(e) => {
+                        // Normalize address on blur (when user leaves the field)
+                        const trimmed = e.target.value.trim()
+                        if (trimmed && isValidAddress(trimmed)) {
+                          setRecipientAddress(normalizeAddress(trimmed) || trimmed)
+                        }
+                      }}
                       className="font-mono h-11"
                     />
                   </div>
@@ -551,7 +721,11 @@ export default function ChronoVault() {
                                 <div className="bg-background/80 rounded-lg p-3 space-y-1 font-mono text-xs">
                                   <p>
                                     <span className="text-muted-foreground">Address:</span>{' '}
-                                    {recipientAddress || <span className="text-yellow-600">Not set</span>}
+                                    {recipientAddress ? (
+                                      <span className="font-mono text-xs break-all">{recipientAddress}</span>
+                                    ) : (
+                                      <span className="text-yellow-600">Not set</span>
+                                    )}
                                   </p>
                                   <p>
                                     <span className="text-muted-foreground">Valid:</span>{' '}
@@ -565,6 +739,9 @@ export default function ChronoVault() {
                                       <span className="text-muted-foreground">N/A</span>
                                     )}
                                   </p>
+                                  {recipientAddress && isValidAddress(recipientAddress) && normalizeAddress(recipientAddress) === address?.toLowerCase() && (
+                                    <p className="text-yellow-600 text-xs mt-1">⚠ Warning: This is your own address</p>
+                                  )}
                                 </div>
                               </div>
                               <div className="space-y-2">
@@ -693,18 +870,47 @@ export default function ChronoVault() {
                                 <p>
                                   {recipientAddress && isValidAddress(recipientAddress) && 
                                    ethAmount && parseFloat(ethAmount) > 0 && 
-                                   unlockDateTime && getUnlockTimestamp() && getUnlockTimestamp()! > Math.floor(Date.now() / 1000) ? (
+                                   unlockDateTime && getUnlockTimestamp() && getUnlockTimestamp()! > Math.floor(Date.now() / 1000) &&
+                                   normalizeAddress(recipientAddress) !== address?.toLowerCase() ? (
                                     <span className="text-green-600 font-semibold">✓ All fields valid - ready to create!</span>
                                   ) : (
                                     <span className="text-yellow-600">⚠ Please fill all required fields correctly</span>
                                   )}
                                 </p>
+                                {recipientAddress && isValidAddress(recipientAddress) && normalizeAddress(recipientAddress) === address?.toLowerCase() && (
+                                  <p className="text-red-600 text-xs mt-1">✗ Cannot send gift to yourself</p>
+                                )}
                               </div>
                             </div>
                           </CardContent>
                         </CollapsibleContent>
                       </Collapsible>
                     </Card>
+                  )}
+
+                  {/* Circuit Breaker Warning */}
+                  {createError && (
+                    createError.message?.toLowerCase().includes('circuit breaker') ||
+                    String(createError).toLowerCase().includes('circuit breaker')
+                  ) && (
+                    <div className="rounded-lg bg-red-500/10 border-2 border-red-500/30 p-4">
+                      <div className="flex items-start gap-3">
+                        <div className="flex-shrink-0 mt-0.5">
+                          <Lock className="h-5 w-5 text-red-500" />
+                        </div>
+                        <div className="flex-1">
+                          <p className="text-sm font-semibold text-red-700 dark:text-red-400 mb-1">
+                            Contract Paused
+                          </p>
+                          <p className="text-xs text-muted-foreground mb-2">
+                            The contract's circuit breaker is currently open. This is a safety mechanism that temporarily pauses the contract. Gift creation is disabled until the circuit breaker is closed.
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            <strong>What to do:</strong> Contact the contract administrator or wait for the circuit breaker to be closed. Existing gifts are not affected and can still be viewed.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
                   )}
 
                   <Button 
@@ -856,13 +1062,33 @@ export default function ChronoVault() {
                     </CardContent>
                   </Card>
                 ) : (
-                  receivedGifts.map((gift) => {
-                    const unlockDate = new Date(gift.unlockTime)
-                    const isUnlocked = new Date() >= unlockDate
-                    const isExpanded = expandedGifts.has(gift.id)
-                    const giftRawData = debugInfo?.allGiftsRaw?.find(gr => gr.id === gift.id)
+                  receivedGifts
+                    .filter((gift) => {
+                      // Filter out gifts with invalid data
+                      if (!gift || gift.id < 0) return false
+                      if (!gift.sender || gift.sender.length < 42) return false
+                      if (!gift.recipient || gift.recipient.length < 42) return false
+                      const amount = parseFloat(gift.amount)
+                      if (isNaN(amount) || amount < 0) return false
+                      return true
+                    })
+                    .map((gift) => {
+                      // Handle edge cases for unlock date
+                      const unlockDate = gift.unlockTime > 0 
+                        ? new Date(gift.unlockTime) 
+                        : new Date(0) // Epoch date if invalid
+                      const now = new Date()
+                      const isUnlocked = gift.unlockTime > 0 && now >= unlockDate
+                      const isExpanded = expandedGifts.has(gift.id)
+                      const giftRawData = debugInfo?.allGiftsRaw?.find(gr => gr.id === gift.id)
+                      
+                      // Format amount safely
+                      const amountValue = parseFloat(gift.amount)
+                      const formattedAmount = isNaN(amountValue) || amountValue <= 0 
+                        ? '0.0000' 
+                        : amountValue.toFixed(4)
 
-                    return (
+                      return (
                       <Card key={gift.id} className="shadow-lg border-2">
                         <CardHeader>
                           <div className="flex items-start justify-between">
@@ -890,10 +1116,13 @@ export default function ChronoVault() {
                             </div>
                             <div className="text-right">
                               <p className="text-3xl font-bold bg-gradient-to-r from-primary to-secondary bg-clip-text text-transparent">
-                                {parseFloat(gift.amount).toFixed(4)} ETH
+                                {formattedAmount} ETH
                               </p>
                               {gift.assetType === 1 && (
                                 <p className="text-xs text-muted-foreground mt-1">ERC-20 Token</p>
+                              )}
+                              {amountValue === 0 && (
+                                <p className="text-xs text-yellow-600 mt-1">Zero amount</p>
                               )}
                             </div>
                           </div>
@@ -906,20 +1135,36 @@ export default function ChronoVault() {
                                   <Unlock className="h-5 w-5 text-green-600" />
                                   <span className="text-sm font-medium text-green-600">Unlocked & Ready to Claim</span>
                                 </>
-                              ) : (
+                              ) : gift.unlockTime > 0 ? (
                                 <>
                                   <Lock className="h-5 w-5 text-muted-foreground" />
                                   <span className="text-sm text-muted-foreground">
                                     Unlocks on {unlockDate.toLocaleString()}
                                   </span>
                                 </>
+                              ) : (
+                                <>
+                                  <Lock className="h-5 w-5 text-red-500" />
+                                  <span className="text-sm text-red-500">
+                                    Invalid unlock time
+                                  </span>
+                                </>
                               )}
                             </div>
                             <Button
                               onClick={() => handleClaimGift(gift.id)}
-                              disabled={!isUnlocked || gift.claimed || isClaiming}
-                              variant={isUnlocked ? "default" : "secondary"}
+                              disabled={!isUnlocked || gift.claimed || isClaiming || amountValue === 0}
+                              variant={isUnlocked && !gift.claimed && amountValue > 0 ? "default" : "secondary"}
                               className="h-10"
+                              title={
+                                gift.claimed 
+                                  ? "Already claimed" 
+                                  : !isUnlocked 
+                                    ? `Unlocks on ${unlockDate.toLocaleString()}`
+                                    : amountValue === 0
+                                      ? "Zero amount gift"
+                                      : "Claim gift"
+                              }
                             >
                               {isClaiming ? (
                                 <>
@@ -928,6 +1173,8 @@ export default function ChronoVault() {
                                 </>
                               ) : gift.claimed ? (
                                 "Claimed"
+                              ) : amountValue === 0 ? (
+                                "Invalid Amount"
                               ) : (
                                 "Claim Gift"
                               )}
