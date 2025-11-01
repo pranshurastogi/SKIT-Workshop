@@ -255,6 +255,24 @@ export function useUserGifts() {
     isLoading,
     error: allGifts.find(g => g.error)?.error || null,
     refetch,
+    // Debug information
+    debug: {
+      nextGiftId,
+      allGiftsCount: allGifts.length,
+      allGiftsWithData: allGifts.filter(g => !!g.data).length,
+      allGiftsLoading: allGifts.filter(g => g.isLoading).length,
+      allGiftsWithErrors: allGifts.filter(g => !!g.error).length,
+      userAddress: address || '',
+      contractAddress: GIFTBOX_CONTRACT_ADDRESS,
+      allGiftsRaw: allGifts.map((g, idx) => ({
+        id: idx,
+        hasData: !!g.data,
+        isLoading: g.isLoading,
+        hasError: !!g.error,
+        error: g.error?.message,
+        rawData: g.data,
+      })),
+    },
   }
 }
 

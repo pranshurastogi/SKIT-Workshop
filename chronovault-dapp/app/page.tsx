@@ -7,7 +7,8 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Gift, Lock, Unlock, Info, BookOpen, ExternalLink, Wallet, Loader2 } from "lucide-react"
+import { Gift, Lock, Unlock, Info, BookOpen, ExternalLink, Wallet, Loader2, ChevronDown, ChevronUp, Eye, EyeOff } from "lucide-react"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import {
   Dialog,
   DialogContent,
@@ -21,6 +22,7 @@ import { ConnectButton } from "@rainbow-me/rainbowkit"
 import { useAccount } from "wagmi"
 import { useCreateEthGift, useClaimGift } from "@/hooks/useGiftBox"
 import { useUserGifts } from "@/hooks/useUserGifts"
+import { GIFTBOX_CONTRACT_ADDRESS } from "@/lib/giftBoxContract"
 import { toast } from "sonner"
 
 export default function ChronoVault() {
@@ -35,7 +37,12 @@ export default function ChronoVault() {
   // Contract hooks
   const { createEthGift, isPending: isCreating, isSuccess: createSuccess, error: createError, reset: resetCreate } = useCreateEthGift()
   const { claimGift, isPending: isClaiming, isSuccess: claimSuccess, error: claimError, reset: resetClaim } = useClaimGift()
-  const { gifts: receivedGifts, isLoading: isLoadingGifts, refetch: refetchGifts } = useUserGifts()
+  const { gifts: receivedGifts, isLoading: isLoadingGifts, refetch: refetchGifts, debug: debugInfo } = useUserGifts()
+  
+  // State for showing/hiding detailed boxes
+  const [showDebugInfo, setShowDebugInfo] = useState(false)
+  const [expandedGifts, setExpandedGifts] = useState<Set<number>>(new Set())
+  const [showCreatePreview, setShowCreatePreview] = useState(false)
 
   // Reset form on successful creation
   useEffect(() => {
@@ -137,6 +144,25 @@ export default function ChronoVault() {
   const formatAddress = (address: string) => {
     if (!address) return ""
     return `${address.slice(0, 6)}...${address.slice(-4)}`
+  }
+  
+  // Toggle gift expansion
+  const toggleGiftExpansion = (giftId: number) => {
+    setExpandedGifts(prev => {
+      const next = new Set(prev)
+      if (next.has(giftId)) {
+        next.delete(giftId)
+      } else {
+        next.add(giftId)
+      }
+      return next
+    })
+  }
+  
+  // Calculate unlock timestamp for preview
+  const getUnlockTimestamp = () => {
+    if (!unlockDateTime) return null
+    return Math.floor(new Date(unlockDateTime).getTime() / 1000)
   }
 
   return (
@@ -498,6 +524,189 @@ export default function ChronoVault() {
                     />
                   </div>
 
+                  {/* Preview/Details Box */}
+                  {(recipientAddress || ethAmount || unlockDateTime || message) && (
+                    <Card className="border-2 border-primary/30 bg-primary/5">
+                      <Collapsible open={showCreatePreview} onOpenChange={setShowCreatePreview}>
+                        <CollapsibleTrigger asChild>
+                          <CardHeader className="cursor-pointer hover:bg-primary/10 transition-colors pb-3">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <Eye className="h-5 w-5 text-primary" />
+                                <CardTitle className="text-lg">Preview Gift Details</CardTitle>
+                              </div>
+                              {showCreatePreview ? (
+                                <ChevronUp className="h-5 w-5 text-muted-foreground" />
+                              ) : (
+                                <ChevronDown className="h-5 w-5 text-muted-foreground" />
+                              )}
+                            </div>
+                          </CardHeader>
+                        </CollapsibleTrigger>
+                        <CollapsibleContent>
+                          <CardContent className="space-y-3 pt-0">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                              <div className="space-y-2">
+                                <p className="font-semibold text-foreground">Recipient Information:</p>
+                                <div className="bg-background/80 rounded-lg p-3 space-y-1 font-mono text-xs">
+                                  <p>
+                                    <span className="text-muted-foreground">Address:</span>{' '}
+                                    {recipientAddress || <span className="text-yellow-600">Not set</span>}
+                                  </p>
+                                  <p>
+                                    <span className="text-muted-foreground">Valid:</span>{' '}
+                                    {recipientAddress ? (
+                                      isValidAddress(recipientAddress) ? (
+                                        <span className="text-green-600">✓ Valid</span>
+                                      ) : (
+                                        <span className="text-red-600">✗ Invalid</span>
+                                      )
+                                    ) : (
+                                      <span className="text-muted-foreground">N/A</span>
+                                    )}
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="space-y-2">
+                                <p className="font-semibold text-foreground">Gift Amount:</p>
+                                <div className="bg-background/80 rounded-lg p-3 space-y-1 font-mono text-xs">
+                                  <p>
+                                    <span className="text-muted-foreground">ETH:</span>{' '}
+                                    {ethAmount || <span className="text-yellow-600">Not set</span>}
+                                  </p>
+                                  <p>
+                                    <span className="text-muted-foreground">Valid:</span>{' '}
+                                    {ethAmount ? (
+                                      parseFloat(ethAmount) > 0 ? (
+                                        <span className="text-green-600">✓ Valid</span>
+                                      ) : (
+                                        <span className="text-red-600">✗ Must be greater than 0</span>
+                                      )
+                                    ) : (
+                                      <span className="text-muted-foreground">N/A</span>
+                                    )}
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                            
+                            {unlockDateTime && (
+                              <div className="space-y-2">
+                                <p className="font-semibold text-foreground text-sm">Unlock Schedule:</p>
+                                <div className="bg-background/80 rounded-lg p-3 space-y-1 font-mono text-xs">
+                                  <p>
+                                    <span className="text-muted-foreground">Date & Time:</span>{' '}
+                                    {new Date(unlockDateTime).toLocaleString() || 'Not set'}
+                                  </p>
+                                  <p>
+                                    <span className="text-muted-foreground">Unix Timestamp:</span>{' '}
+                                    {getUnlockTimestamp() || 'Not set'}
+                                  </p>
+                                  <p>
+                                    <span className="text-muted-foreground">Status:</span>{' '}
+                                    {unlockDateTime ? (
+                                      getUnlockTimestamp() && getUnlockTimestamp()! > Math.floor(Date.now() / 1000) ? (
+                                        <span className="text-green-600">✓ Future date</span>
+                                      ) : (
+                                        <span className="text-red-600">✗ Must be in the future</span>
+                                      )
+                                    ) : (
+                                      <span className="text-yellow-600">Not set</span>
+                                    )}
+                                  </p>
+                                  {getUnlockTimestamp() && (
+                                    <p>
+                                      <span className="text-muted-foreground">Time Until Unlock:</span>{' '}
+                                      {(() => {
+                                        const seconds = getUnlockTimestamp()! - Math.floor(Date.now() / 1000)
+                                        if (seconds <= 0) return 'Invalid (past date)'
+                                        const days = Math.floor(seconds / 86400)
+                                        const hours = Math.floor((seconds % 86400) / 3600)
+                                        const minutes = Math.floor((seconds % 3600) / 60)
+                                        return `${days}d ${hours}h ${minutes}m`
+                                      })()}
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                            
+                            {message && (
+                              <div className="space-y-2">
+                                <p className="font-semibold text-foreground text-sm">Message:</p>
+                                <div className="bg-background/80 rounded-lg p-3">
+                                  <p className="text-xs break-words whitespace-pre-wrap">{message}</p>
+                                  <p className="text-xs text-muted-foreground mt-2">
+                                    Length: {message.length} characters
+                                  </p>
+                                </div>
+                              </div>
+                            )}
+                            
+                            <div className="space-y-2">
+                              <p className="font-semibold text-foreground text-sm">Transaction Details:</p>
+                              <div className="bg-background/80 rounded-lg p-3 space-y-1 font-mono text-xs">
+                                <p>
+                                  <span className="text-muted-foreground">Function:</span> createEthGift()
+                                </p>
+                                <p>
+                                  <span className="text-muted-foreground">Contract:</span>{' '}
+                                  {GIFTBOX_CONTRACT_ADDRESS}
+                                </p>
+                                <p>
+                                  <span className="text-muted-foreground">Message URI:</span>{' '}
+                                  {message || 'ipfs://'}
+                                </p>
+                                <p>
+                                  <span className="text-muted-foreground">ETH Value:</span>{' '}
+                                  {ethAmount || '0'} ETH
+                                </p>
+                              </div>
+                            </div>
+                            
+                            <div className="rounded-lg bg-green-500/10 border border-green-500/30 p-3">
+                              <p className="text-sm font-semibold text-green-700 dark:text-green-400 mb-2">
+                                Validation Status:
+                              </p>
+                              <div className="text-xs text-muted-foreground space-y-1">
+                                <p>
+                                  {recipientAddress && isValidAddress(recipientAddress) ? (
+                                    <span className="text-green-600">✓ Recipient address is valid</span>
+                                  ) : (
+                                    <span className="text-red-600">✗ Recipient address is invalid or missing</span>
+                                  )}
+                                </p>
+                                <p>
+                                  {ethAmount && parseFloat(ethAmount) > 0 ? (
+                                    <span className="text-green-600">✓ ETH amount is valid</span>
+                                  ) : (
+                                    <span className="text-red-600">✗ ETH amount is invalid or missing</span>
+                                  )}
+                                </p>
+                                <p>
+                                  {unlockDateTime && getUnlockTimestamp() && getUnlockTimestamp()! > Math.floor(Date.now() / 1000) ? (
+                                    <span className="text-green-600">✓ Unlock time is in the future</span>
+                                  ) : (
+                                    <span className="text-red-600">✗ Unlock time must be in the future</span>
+                                  )}
+                                </p>
+                                <p>
+                                  {recipientAddress && isValidAddress(recipientAddress) && 
+                                   ethAmount && parseFloat(ethAmount) > 0 && 
+                                   unlockDateTime && getUnlockTimestamp() && getUnlockTimestamp()! > Math.floor(Date.now() / 1000) ? (
+                                    <span className="text-green-600 font-semibold">✓ All fields valid - ready to create!</span>
+                                  ) : (
+                                    <span className="text-yellow-600">⚠ Please fill all required fields correctly</span>
+                                  )}
+                                </p>
+                              </div>
+                            </div>
+                          </CardContent>
+                        </CollapsibleContent>
+                      </Collapsible>
+                    </Card>
+                  )}
+
                   <Button 
                     onClick={handleCreateGiftBox} 
                     className="w-full gap-2 h-12 text-base" 
@@ -532,18 +741,102 @@ export default function ChronoVault() {
 
             <TabsContent value="receive" className="mt-6">
               <div className="space-y-4">
-                {/* Debug info - remove in production */}
-                {process.env.NODE_ENV === 'development' && (
-                  <Card className="shadow-md border-yellow-500/20 bg-yellow-500/5">
-                    <CardContent className="py-3">
-                      <p className="text-xs text-muted-foreground">
-                        Debug: Connected as {address?.slice(0, 6)}...{address?.slice(-4)} | 
-                        Found {receivedGifts.length} gifts | 
-                        Loading: {isLoadingGifts ? 'Yes' : 'No'}
-                      </p>
-                    </CardContent>
-                  </Card>
-                )}
+                {/* Comprehensive Debug Panel */}
+                <Card className="shadow-md border-blue-500/30 bg-blue-500/5">
+                  <Collapsible open={showDebugInfo} onOpenChange={setShowDebugInfo}>
+                    <CollapsibleTrigger asChild>
+                      <CardHeader className="cursor-pointer hover:bg-blue-500/10 transition-colors">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Info className="h-5 w-5 text-blue-600" />
+                            <CardTitle className="text-lg">Debug Information</CardTitle>
+                          </div>
+                          {showDebugInfo ? (
+                            <ChevronUp className="h-5 w-5 text-muted-foreground" />
+                          ) : (
+                            <ChevronDown className="h-5 w-5 text-muted-foreground" />
+                          )}
+                        </div>
+                        <CardDescription>
+                          Troubleshooting info for debugging gift visibility issues
+                        </CardDescription>
+                      </CardHeader>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent>
+                      <CardContent className="space-y-4 pt-0">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                          <div className="space-y-2">
+                            <p className="font-semibold text-foreground">Connection Status:</p>
+                            <div className="bg-background/50 rounded-lg p-3 space-y-1 font-mono text-xs">
+                              <p><span className="text-muted-foreground">Address:</span> {address || 'Not connected'}</p>
+                              <p><span className="text-muted-foreground">Is Loading:</span> {isLoadingGifts ? 'Yes' : 'No'}</p>
+                              <p><span className="text-muted-foreground">Contract:</span> {debugInfo?.contractAddress || 'N/A'}</p>
+                            </div>
+                          </div>
+                          <div className="space-y-2">
+                            <p className="font-semibold text-foreground">Gift Statistics:</p>
+                            <div className="bg-background/50 rounded-lg p-3 space-y-1 font-mono text-xs">
+                              <p><span className="text-muted-foreground">Next Gift ID:</span> {debugInfo?.nextGiftId ?? 'Loading...'}</p>
+                              <p><span className="text-muted-foreground">Total Gifts Checked:</span> {debugInfo?.allGiftsCount ?? 0}</p>
+                              <p><span className="text-muted-foreground">Gifts with Data:</span> {debugInfo?.allGiftsWithData ?? 0}</p>
+                              <p><span className="text-muted-foreground">Currently Loading:</span> {debugInfo?.allGiftsLoading ?? 0}</p>
+                              <p><span className="text-muted-foreground">Gifts with Errors:</span> {debugInfo?.allGiftsWithErrors ?? 0}</p>
+                              <p><span className="text-muted-foreground">Filtered for You:</span> {receivedGifts.length}</p>
+                            </div>
+                          </div>
+                        </div>
+                        
+                        {debugInfo && debugInfo.allGiftsRaw && debugInfo.allGiftsRaw.length > 0 && (
+                          <div className="space-y-2">
+                            <p className="font-semibold text-foreground">Raw Gift Data:</p>
+                            <div className="bg-background/50 rounded-lg p-3 max-h-96 overflow-y-auto">
+                              <div className="space-y-3 text-xs font-mono">
+                                {debugInfo.allGiftsRaw.map((giftRaw, idx) => {
+                                  const gift = receivedGifts.find(g => g.id === idx)
+                                  return (
+                                    <div key={idx} className="border-b border-border/50 pb-2 last:border-0">
+                                      <p className="font-semibold text-primary mb-1">Gift ID: {giftRaw.id}</p>
+                                      <p className="text-muted-foreground">Has Data: {giftRaw.hasData ? 'Yes' : 'No'}</p>
+                                      <p className="text-muted-foreground">Is Loading: {giftRaw.isLoading ? 'Yes' : 'No'}</p>
+                                      <p className="text-muted-foreground">Has Error: {giftRaw.hasError ? 'Yes' : 'No'}</p>
+                                      {giftRaw.hasError && (
+                                        <p className="text-red-500 text-xs mt-1">Error: {giftRaw.error || 'Unknown error'}</p>
+                                      )}
+                                      {giftRaw.hasData && giftRaw.rawData && (
+                                        <div className="mt-2 p-2 bg-background/80 rounded text-xs overflow-x-auto">
+                                          <pre className="whitespace-pre-wrap break-words">
+                                            {JSON.stringify(giftRaw.rawData, (key, value) => 
+                                              typeof value === 'bigint' ? value.toString() : value, 2)}
+                                          </pre>
+                                        </div>
+                                      )}
+                                      {gift ? (
+                                        <p className="text-green-600 text-xs mt-1">✓ This gift is visible to you (matched recipient)</p>
+                                      ) : giftRaw.hasData && (
+                                        <p className="text-yellow-600 text-xs mt-1">⚠ This gift exists but you're not the recipient</p>
+                                      )}
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                        
+                        <div className="rounded-lg bg-yellow-500/10 border border-yellow-500/30 p-3">
+                          <p className="text-sm font-semibold text-yellow-700 dark:text-yellow-400 mb-2">Troubleshooting Tips:</p>
+                          <ul className="text-xs text-muted-foreground space-y-1 list-disc list-inside">
+                            <li>If you see gifts with data but they don't appear in your list, check that the recipient address matches your address exactly</li>
+                            <li>If gifts are loading, wait a few seconds and check the console for detailed logs</li>
+                            <li>If you see errors, check your network connection and contract address</li>
+                            <li>Make sure you're connected to the correct network (Sepolia testnet)</li>
+                            <li>Address comparison is case-insensitive - check the raw data to see the actual recipient</li>
+                          </ul>
+                        </div>
+                      </CardContent>
+                    </CollapsibleContent>
+                  </Collapsible>
+                </Card>
                 
                 {isLoadingGifts ? (
                   <Card className="shadow-xl">
@@ -566,6 +859,8 @@ export default function ChronoVault() {
                   receivedGifts.map((gift) => {
                     const unlockDate = new Date(gift.unlockTime)
                     const isUnlocked = new Date() >= unlockDate
+                    const isExpanded = expandedGifts.has(gift.id)
+                    const giftRawData = debugInfo?.allGiftsRaw?.find(gr => gr.id === gift.id)
 
                     return (
                       <Card key={gift.id} className="shadow-lg border-2">
@@ -638,6 +933,79 @@ export default function ChronoVault() {
                               )}
                             </Button>
                           </div>
+                          
+                          {/* Expandable Details Section */}
+                          <Collapsible open={isExpanded} onOpenChange={() => toggleGiftExpansion(gift.id)}>
+                            <CollapsibleTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="w-full mt-4 justify-between"
+                              >
+                                <span className="text-xs">View Details</span>
+                                {isExpanded ? (
+                                  <ChevronUp className="h-4 w-4" />
+                                ) : (
+                                  <ChevronDown className="h-4 w-4" />
+                                )}
+                              </Button>
+                            </CollapsibleTrigger>
+                            <CollapsibleContent>
+                              <div className="mt-4 pt-4 border-t border-border space-y-3">
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                                  <div className="space-y-2">
+                                    <p className="font-semibold text-foreground">Gift Information:</p>
+                                    <div className="bg-muted/50 rounded-lg p-3 space-y-1 font-mono text-xs">
+                                      <p><span className="text-muted-foreground">Gift ID:</span> {gift.id}</p>
+                                      <p><span className="text-muted-foreground">Sender:</span> {gift.sender}</p>
+                                      <p><span className="text-muted-foreground">Recipient:</span> {gift.recipient}</p>
+                                      <p><span className="text-muted-foreground">Amount:</span> {gift.amount} ETH</p>
+                                      <p><span className="text-muted-foreground">Asset Type:</span> {gift.assetType === 0 ? 'Native (ETH)' : 'ERC-20'}</p>
+                                      {gift.assetType === 1 && (
+                                        <p><span className="text-muted-foreground">Token:</span> {gift.token}</p>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <div className="space-y-2">
+                                    <p className="font-semibold text-foreground">Timing & Status:</p>
+                                    <div className="bg-muted/50 rounded-lg p-3 space-y-1 font-mono text-xs">
+                                      <p><span className="text-muted-foreground">Unlock Time:</span> {new Date(gift.unlockTime).toLocaleString()}</p>
+                                      <p><span className="text-muted-foreground">Unlock Timestamp:</span> {Math.floor(gift.unlockTime / 1000)}</p>
+                                      <p><span className="text-muted-foreground">Current Time:</span> {new Date().toLocaleString()}</p>
+                                      <p><span className="text-muted-foreground">Is Unlocked:</span> {isUnlocked ? 'Yes' : 'No'}</p>
+                                      <p><span className="text-muted-foreground">Is Claimed:</span> {gift.claimed ? 'Yes' : 'No'}</p>
+                                      <p><span className="text-muted-foreground">Time Remaining:</span> {
+                                        isUnlocked 
+                                          ? 'Ready to claim' 
+                                          : `${Math.ceil((gift.unlockTime - Date.now()) / (1000 * 60 * 60))} hours`
+                                      }</p>
+                                    </div>
+                                  </div>
+                                </div>
+                                
+                                {gift.encryptedMessageURI && (
+                                  <div className="space-y-2">
+                                    <p className="font-semibold text-foreground text-sm">Message URI:</p>
+                                    <div className="bg-muted/50 rounded-lg p-3">
+                                      <p className="text-xs font-mono break-all">{gift.encryptedMessageURI}</p>
+                                    </div>
+                                  </div>
+                                )}
+                                
+                                {giftRawData && giftRawData.rawData && (
+                                  <div className="space-y-2">
+                                    <p className="font-semibold text-foreground text-sm">Raw Contract Data:</p>
+                                    <div className="bg-muted/50 rounded-lg p-3 max-h-64 overflow-y-auto">
+                                      <pre className="text-xs font-mono whitespace-pre-wrap break-words">
+                                        {JSON.stringify(giftRawData.rawData, (key, value) => 
+                                          typeof value === 'bigint' ? value.toString() : value, 2)}
+                                      </pre>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            </CollapsibleContent>
+                          </Collapsible>
                         </CardContent>
                       </Card>
                     )
